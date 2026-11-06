@@ -27,6 +27,12 @@ Projeto de portfólio, sem cobrança ou proposta comercial. As pessoas, organiza
 
 ![Orientação guiada](docs/screenshots/orientacao-desktop.png)
 
+## Interface e movimento
+
+A identidade editorial usa papel, terracota e oliva, com uma composição assimétrica e uma ilustração original do percurso documento → orientação → próximo passo. Busca, navegação, cartões, diálogos e botões respondem a foco e interação; entradas em sequência são curtas e terminam automaticamente. A preferência `prefers-reduced-motion` desativa animações e transições. Em telas menores, a composição prioriza leitura e acesso à busca.
+
+Referências de direção visual: [Skiper UI](https://skiper-ui.com/), [MotionSites](https://motionsites.ai/), [Uiverse](https://uiverse.io/elements) e [Jitter](https://jitter.video/templates/all/), especialmente a [busca animada](https://jitter.video/template/animated-search-bar/) e as [entradas de cartões em sequência](https://jitter.video/template/color-cards-cascade/). A implementação de ilustração, estilos e movimentos deste projeto é original, com CSS e SVG, sem novas dependências de animação.
+
 ## Executar a demonstração
 
 Requisitos: Node.js **22.17 ou posterior** e npm. Nenhuma credencial é necessária para `/demo`.

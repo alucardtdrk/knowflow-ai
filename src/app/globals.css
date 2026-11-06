@@ -663,7 +663,7 @@ select:focus {
   font-weight: 400;
   color: var(--terracotta);
 }
-.hero > p {
+.hero-copy > p {
   font-size: 12px;
   line-height: 1.85;
   color: #858074;
@@ -1905,7 +1905,7 @@ td .small {
 .user-row strong {
   font-size: 12px;
 }
-.hero > p {
+.hero-copy > p {
   font-size: 14px;
 }
 .ask-input input {
@@ -1969,7 +1969,7 @@ td .small {
   .hero h1 {
     font-size: 78px;
   }
-  .hero > p {
+  .hero-copy > p {
     font-size: 14px;
   }
   .ask-input {
@@ -2128,7 +2128,7 @@ td .small {
   .hero h1 {
     font-size: 52px;
   }
-  .hero > p {
+  .hero-copy > p {
     font-size: 11px;
   }
   .desktop-break {
@@ -2283,7 +2283,7 @@ td .small {
     font-size: 54px;
     letter-spacing: -0.9px;
   }
-  .hero > p {
+  .hero-copy > p {
     font-size: 11px;
     margin-top: 20px;
     max-width: 310px;

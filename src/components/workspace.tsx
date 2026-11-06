@@ -50,6 +50,7 @@ import type {
 import type { Source, RequestStatus } from "@/lib/types";
 import { demoConversation } from "@/lib/demo";
 import { buildRequestSummary } from "@/lib/handoff";
+import { KnowledgeScene } from "./knowledge-scene";
 import {
   loadWorkspace,
   askAction,
@@ -580,7 +581,11 @@ export function Workspace({
             </Link>
           </div>
         )}
-        <main id="main-content" className={`main-content view-${view}`}>
+        <main
+          id="main-content"
+          className={`main-content view-${view} view-surface`}
+          key={view}
+        >
           {notice && (
             <div className="notice" role="status">
               <CheckCircle2 size={17} />
@@ -602,31 +607,36 @@ export function Workspace({
               </button>
             </div>
           )}
+
           {view === "home" && (
             <>
               <div className="page-kicker">
                 <span className="eyebrow">SEU ASSISTENTE DE CONHECIMENTO</span>
                 <span className="today">
                   {demo
-                    ? "QUINTA-FEIRA, 5 DE NOVEMBRO"
+                    ? "DOCUMENTOS. CONTEXTO. AÇÃO."
                     : "CONHECIMENTO DA SUA EQUIPE"}
                 </span>
               </div>
               <section className="hero">
-                <div className="hero-label">
-                  <span className="tiny-square" />
-                  {data.teamName}
+                <div className="hero-copy">
+                  <div className="hero-label">
+                    <span className="tiny-square" />
+                    {data.teamName}
+                  </div>
+                  <h1>
+                    O que você precisa
+                    <br />
+                    resolver <em>hoje?</em>
+                  </h1>
+                  <p>
+                    O conhecimento da sua equipe, transformado em próximos
+                    passos.
+                    <br className="desktop-break" /> Pergunte, encontre a fonte
+                    e siga em frente.
+                  </p>
                 </div>
-                <h1>
-                  O que você precisa
-                  <br />
-                  resolver <em>hoje?</em>
-                </h1>
-                <p>
-                  O conhecimento da sua equipe, transformado em próximos passos.
-                  <br className="desktop-break" /> Pergunte, encontre a fonte e
-                  siga em frente.
-                </p>
+                <KnowledgeScene />
                 <form
                   className="ask-box"
                   onSubmit={(e) => {
@@ -634,6 +644,9 @@ export function Workspace({
                     void ask();
                   }}
                 >
+                  <span className="search-caption">
+                    UMA PERGUNTA. UM CAMINHO MAIS CLARO.
+                  </span>
                   <div className="ask-input">
                     <Search size={23} />
                     <input

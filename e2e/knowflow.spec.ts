@@ -12,6 +12,7 @@ test("explores a clearly labelled portfolio demonstration", async ({
   await page.screenshot({
     path: `docs/screenshots/demo-${test.info().project.name}.png`,
     fullPage: true,
+    animations: "disabled",
   });
   await page.getByRole("button", { name: "Minha VPN não conecta" }).click();
   await expect(
@@ -21,6 +22,7 @@ test("explores a clearly labelled portfolio demonstration", async ({
     await page.screenshot({
       path: "docs/screenshots/orientacao-desktop.png",
       fullPage: true,
+      animations: "disabled",
     });
   await page
     .getByRole("button", { name: "Ver fonte: Guia de acesso remoto" })
@@ -76,4 +78,42 @@ test("demo keeps requests and conversations scoped to the selected team", async 
   await expect(
     page.getByText("Acesso à pasta compartilhada", { exact: true }),
   ).toHaveCount(0);
+});
+
+test("polished navigation preserves keyboard access and reduced motion", async ({
+  page,
+  isMobile,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.goto("/demo");
+  await expect(page.locator(".view-surface")).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "O que você precisa resolver hoje?" }),
+  ).toBeVisible();
+  if (!isMobile) await expect(page.locator(".knowledge-scene")).toBeVisible();
+  expect(
+    await page
+      .locator(".view-surface")
+      .evaluate((el) => getComputedStyle(el).animationName),
+  ).toBe("none");
+  await page.getByLabel("Sua pergunta", { exact: true }).focus();
+  await page.keyboard.type("Minha VPN não conecta");
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "Buscar orientação", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("status")).toContainText(
+    "A demonstração usa exemplos preparados",
+  );
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+  if (!isMobile) {
+    await page.setViewportSize({ width: 1280, height: 640 });
+    await page.locator(".user-row").scrollIntoViewIfNeeded();
+    await expect(page.locator(".user-row")).toBeInViewport();
+  }
 });

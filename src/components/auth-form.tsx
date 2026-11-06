@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { createAuthClient } from "better-auth/react";
 import { ArrowUpRight, ArrowRight, BookOpen, ShieldCheck } from "lucide-react";
+import { KnowledgeScene } from "./knowledge-scene";
 const authClient = createAuthClient();
 export function AuthForm({ configured }: { configured: boolean }) {
   const router = useRouter();
@@ -39,6 +40,7 @@ export function AuthForm({ configured }: { configured: boolean }) {
               Mais clareza para seguir em frente.
             </span>
           </div>
+          <KnowledgeScene />
         </div>
         <span className="small muted">
           Feito para pessoas. Baseado em conhecimento.
