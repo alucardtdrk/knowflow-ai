@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 128" role="img" aria-labelledby="title desc">
+  <title id="title">KnowFlow AI wordmark</title>
+  <desc id="desc">KnowFlow AI logo with flowing K symbol</desc>
+  <defs>
+    <linearGradient id="kfGradient" x1="16" y1="24" x2="112" y2="104" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C85A3F"/><stop offset="0.56" stop-color="#6B705C"/><stop offset="1" stop-color="#C99A3E"/>
+    </linearGradient>
+  </defs>
+  <g transform="translate(0 0)">
+    <path d="M34 22v84M34 64L92 26M34 64l58 38" fill="none" stroke="url(#kfGradient)" stroke-width="14" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="34" cy="22" r="7" fill="#C85A3F"/><circle cx="92" cy="26" r="7" fill="#6B705C"/><circle cx="92" cy="102" r="7" fill="#C99A3E"/>
+  </g>
+  <text x="132" y="78" font-family="Inter,Manrope,Arial,sans-serif" font-size="48" font-weight="700" letter-spacing="-1.5" fill="#25231F">KnowFlow</text>
+  <text x="425" y="77" font-family="Inter,Manrope,Arial,sans-serif" font-size="25" font-weight="700" letter-spacing="0.5" fill="#C85A3F">AI</text>
+</svg>

@@ -1,0 +1,7 @@
+Guia de acesso remoto — exemplo fictício
+
+Antes de conectar à VPN, verifique a conexão com a internet abrindo uma página no navegador.
+
+Se a internet funciona mas a VPN não conecta, anote a mensagem de erro exibida pelo cliente. Não informe sua senha nem códigos de autenticação.
+
+Se o problema persistir, prepare uma solicitação para a equipe de Tecnologia com a mensagem de erro, o horário e as etapas já verificadas.
