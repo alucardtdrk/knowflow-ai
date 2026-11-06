@@ -23,6 +23,7 @@ import {
 } from "@/features/documents/service";
 import {
   ownConversation,
+  deleteConversation,
   recordStepResult,
 } from "@/features/assistant/service";
 
@@ -164,4 +165,104 @@ describe("real database authorization", () => {
     ).toBe(1);
     await expect(retryDocument(alice, scope, d.id)).rejects.toThrow();
   });
+});
+it("lists only active invitations for the signed-in email and accepts them without creating an organization", async () => {
+  const { listPendingInvitations } = await import("@/features/teams/service");
+  await createOrganization(bob, "Organização já existente de Bob");
+  await inviteMember(alice, scope, "bob@example.test", "member");
+  const pending = await listPendingInvitations(bob);
+  expect(pending).toHaveLength(1);
+  expect(pending[0].teamId).toBe(scope.teamId);
+  expect(await listPendingInvitations(alice)).toHaveLength(0);
+  await expect(acceptInvitation(alice, pending[0].id)).rejects.toThrow();
+  await acceptInvitation(bob, pending[0].id);
+  expect(await listPendingInvitations(bob)).toHaveLength(0);
+  expect(await requireTeamAccess(bob, scope)).toBe("member");
+});
+it("preserves the last manager when removal or demotion is attempted", async () => {
+  await expect(
+    changeMember(alice, scope, alice.userId, "remove"),
+  ).rejects.toThrow("pelo menos um gestor");
+  await expect(
+    changeMember(alice, scope, alice.userId, "member"),
+  ).rejects.toThrow("pelo menos um gestor");
+  expect(await requireTeamAccess(alice, scope)).toBe("manager");
+});
+
+it("rolls back a status update when assignment validation fails", async () => {
+  const request = await createRequest(alice, scope, {
+    title: "Verificação de atomicidade",
+    summary: "Uma alteração inválida não deve salvar parcialmente.",
+    confirmationId: crypto.randomUUID(),
+    confirmed: true,
+  });
+  await expect(
+    updateRequest(alice, scope, {
+      id: request.id,
+      status: "closed",
+      assigneeId: "missing-user",
+    }),
+  ).rejects.toThrow();
+  const [saved] = await rows<{ status: string; assignee_id: string | null }>(
+    sql`SELECT status,assignee_id FROM requests WHERE id=${request.id}`,
+  );
+  expect(saved).toEqual({ status: "open", assignee_id: null });
+});
+
+it("rejects expired and malformed invitations without granting membership", async () => {
+  await db.execute(
+    sql`INSERT INTO "user"(id,name,email) VALUES ('expired-user','Expired','expired@example.test')`,
+  );
+  const link = await inviteMember(
+    alice,
+    scope,
+    "expired@example.test",
+    "member",
+  );
+  await db.execute(
+    sql`UPDATE invitations SET expires_at=now()-interval '1 day' WHERE email='expired@example.test'`,
+  );
+  await expect(
+    acceptInvitation({ userId: "expired-user" }, link.split("/").at(-1)!),
+  ).rejects.toThrow();
+  await expect(
+    acceptInvitation({ userId: "expired-user" }, "invalid-token"),
+  ).rejects.toThrow();
+  await expect(
+    requireTeamAccess({ userId: "expired-user" }, scope),
+  ).rejects.toThrow();
+});
+
+it("deletes only owned conversations, cascades private content and preserves requests", async () => {
+  const [c] = await rows<{ id: string }>(
+    sql`INSERT INTO conversations(organization_id,team_id,author_id,title) VALUES (${scope.organizationId},${scope.teamId},'alice','Excluir teste') RETURNING id`,
+  );
+  await db.execute(
+    sql`INSERT INTO messages(conversation_id,role,content) VALUES (${c.id},'user','Mensagem privada')`,
+  );
+  await db.execute(
+    sql`INSERT INTO guided_steps(conversation_id,instruction) VALUES (${c.id},'Etapa privada')`,
+  );
+  const request = await createRequest(alice, scope, {
+    confirmationId: crypto.randomUUID(),
+    title: "Solicitação preservada",
+    summary: "Resumo compartilhado antes de excluir.",
+    conversationId: c.id,
+    confirmed: true,
+  });
+  await expect(deleteConversation(bob, scope, c.id)).rejects.toThrow();
+  await expect(
+    deleteConversation(alice, { ...scope, teamId: crypto.randomUUID() }, c.id),
+  ).rejects.toThrow();
+  await deleteConversation(alice, scope, c.id);
+  expect(
+    await rows(sql`SELECT id FROM messages WHERE conversation_id=${c.id}`),
+  ).toHaveLength(0);
+  expect(
+    await rows(sql`SELECT id FROM guided_steps WHERE conversation_id=${c.id}`),
+  ).toHaveLength(0);
+  expect(
+    await rows(sql`SELECT id FROM requests WHERE id=${request.id}`),
+  ).toHaveLength(1);
+  await expect(ownConversation(alice, scope, c.id)).rejects.toThrow();
 });

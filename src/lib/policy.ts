@@ -16,14 +16,14 @@ export function assertTeamAccess(
   }
 }
 export function assertInvitation(
-  invite: { email: string; expiresAt: Date; acceptedAt: Date | null },
+  invite: { email: string; expiresAt: Date | string; acceptedAt: Date | null },
   email: string,
   now = new Date(),
 ) {
   if (
     invite.email.toLowerCase() !== email.toLowerCase() ||
     invite.acceptedAt ||
-    invite.expiresAt <= now
+    !(new Date(invite.expiresAt).getTime() > now.getTime())
   )
     throw new AppError("Convite inválido, expirado ou já utilizado.", 403);
 }

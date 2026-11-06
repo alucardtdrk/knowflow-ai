@@ -13,14 +13,14 @@ Projeto de portfólio, sem cobrança ou proposta comercial. As pessoas, organiza
 
 **Demonstração, sem credenciais:** `/demo` tem exemplos preparados de Tecnologia e Pessoas & Cultura. É possível abrir fontes fictícias, informar resultados de etapas e registrar solicitações de exemplo. As alterações duram apenas durante a sessão da página. Perguntas livres, upload e convites reais exigem a aplicação configurada. A demo nunca chama a IA nem representa pesquisa real.
 
-**Aplicação integrada:** `/login` permite cadastro e acesso; `/app` abre as equipes autorizadas. Requer PostgreSQL, armazenamento privado e configuração de autenticação. A busca documental e a ingestão com embeddings também requerem a chave de IA.
+**Aplicação integrada:** `/login` permite cadastro e acesso; `/app` abre as equipes autorizadas. Requer PostgreSQL, armazenamento privado e configuração de autenticação. A busca e a indexação são locais; respostas e orientação requerem a chave do agente Toqan.
 
 ## Funcionalidades
 
 - Organizações com múltiplos espaços de equipe, membros e convites de uso único válidos por sete dias.
 - Administrador na organização; gestor e membro por equipe. Administradores precisam participar da equipe para consultar conteúdo.
 - Upload de PDF com texto, DOCX e TXT (UTF-8), até 20 MB. Processamento persistente em segundo plano, estados visíveis e repetição após falha.
-- Busca vetorial limitada à equipe, respostas com fontes e localização: página em PDF; parágrafo em DOCX/TXT.
+- Busca textual em português limitada à equipe, respostas com fontes e localização: página em PDF; parágrafo em DOCX/TXT.
 - Conversas privadas e orientação com resultado de cada etapa persistido.
 - Solicitações com resumo editável, confirmação explícita, comentários, responsável e acompanhamento.
 - Interface responsiva em português, navegação por teclado, formulários identificados e diálogos com foco contido.
@@ -59,7 +59,7 @@ As fontes web têm alternativas locais do sistema; se o serviço de fontes estiv
    node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"
    ```
 
-2. Instale Docker com Compose e inicie os serviços locais:
+2. Instale Docker com Compose e inicie PostgreSQL (porta local 55432) e SeaweedFS, compatível com S3 (porta local 9000):
 
    ```sh
    docker compose up -d
@@ -67,9 +67,13 @@ As fontes web têm alternativas locais do sistema; se o serviço de fontes estiv
    npm run db:migrate
    ```
 
-3. Configure `OPENAI_API_KEY`. O padrão usa `gpt-4.1-mini` para geração e `text-embedding-3-small` com 1.536 dimensões para embeddings. Ao trocar o modelo de embeddings, reenvie os documentos; não misture vetores de modelos diferentes.
+3. Configure `TOQAN_API_KEY` com a chave do agente publicado no Toqan. O modelo é selecionado no agente, não no `.env`. `TOQAN_BASE_URL` é opcional e usa `https://api.toqan.ai/api`. Não é necessária uma chave OpenAI.
 
-4. Crie o bucket privado `knowflow` no console local do armazenamento em [localhost:9001](http://localhost:9001), ou use o seed abaixo, que cria o bucket. Os valores do Compose são exclusivos para desenvolvimento e os serviços ficam vinculados ao loopback.
+   Nas instruções do agente, defina o contrato da integração: responda somente com JSON `{"text":"resposta","sourceIds":["chunkId recebido"],"nextStep":null}`; `nextStep` pode ser um próximo passo em texto. Use apenas os trechos e IDs enviados pela aplicação. Sem evidência, use `sourceIds: []` e `nextStep: null`. Não habilite ferramentas externas nem anexe conhecimento compartilhado de equipes diferentes ao agente.
+
+   A busca usa palavras do título e do texto, com o dicionário português do PostgreSQL; não é semântica e pode não encontrar sinônimos. Documentos existentes continuam compatíveis. Reprocesse os que falharam anteriormente por falta da chave OpenAI.
+
+4. O SeaweedFS cria automaticamente o bucket `knowflow` com autenticação habilitada. Arquivos e banco ficam em volumes Docker persistentes, fora do repositório. Os valores do Compose são exclusivos para desenvolvimento e os serviços ficam vinculados ao loopback. Não execute `docker compose down -v` se quiser preservar os dados locais.
 
 5. Opcionalmente, defina `ALLOW_LOCAL_SEED=true` e execute:
 
@@ -86,7 +90,7 @@ As fontes web têm alternativas locais do sistema; se o serviço de fontes estiv
    npm run dev
    ```
 
-   Abra [localhost:3000/login](http://localhost:3000/login). Sem worker, uploads permanecem na fila. Sem chave de IA, o processamento falha de forma visível e pode ser repetido depois de configurar o serviço.
+   Abra [localhost:3000/login](http://localhost:3000/login). Sem worker, uploads permanecem na fila. Sem chave Toqan, os documentos são indexados e ficam disponíveis; somente as respostas com IA exigem a configuração.
 
 Não há envio de email: gestores copiam o link de convite para compartilhar com o destinatário, que precisa entrar com o email correspondente. Verificação de propriedade do email e recuperação de senha via email não estão incluídas nesta versão de portfólio.
 
@@ -100,19 +104,19 @@ flowchart LR
   A --> S[(Arquivos privados S3)]
   P --> J[Trabalhador · fila persistente]
   J --> S
-  J --> E[Extração e embeddings]
+  J --> E[Extração e indexação textual]
   E --> P
   N --> R[Busca de trechos autorizados]
-  R --> L[Modelo de linguagem]
+  R --> L[Agente Toqan]
   L --> V[Validação de referências]
   V --> U
 ```
 
-Next.js App Router e TypeScript concentram interface e serviços. Better Auth usa o adapter Drizzle; PostgreSQL armazena entidades relacionais, auditoria, fila e vetores. Consultas parametrizadas e chaves estrangeiras compostas preservam os vínculos entre equipe e organização. A migração SQL inicial é versionada e aplicada de forma transacional, com controle de aplicação e lock.
+Next.js App Router e TypeScript concentram interface e serviços. Better Auth usa o adapter Drizzle; PostgreSQL armazena entidades relacionais, auditoria, fila e trechos pesquisáveis. A coluna de vetores existente é preservada para compatibilidade, mas não é utilizada. Consultas parametrizadas e chaves estrangeiras compostas preservam os vínculos entre equipe e organização. A migração SQL inicial é versionada e aplicada de forma transacional, com controle de aplicação e lock.
 
 A fila usa claim atômico, lease recuperável, no máximo três tentativas e conferência de exclusão antes de publicar trechos. O trabalhador compartilha código com a aplicação, mas roda em processo próprio. S3 mantém os arquivos privados; o servidor autoriza cada download. Não há serviço Redis nem API Python separada.
 
-A IA recebe apenas trechos da equipe autorizada, a pergunta e histórico limitado. A resposta estruturada passa por validação de IDs de fontes. Quando falta evidência, o assistente reconhece a lacuna. Não há ferramentas de execução ou ações em sistemas externos. Essa validação impede fontes inventadas; **não prova por si só que cada afirmação está semanticamente correta**. Avaliação humana dos documentos e respostas continua necessária.
+O Toqan recebe apenas trechos da equipe autorizada, a pergunta e histórico limitado em uma nova conversa remota para cada geração. A resposta estruturada passa por validação de IDs de fontes. Quando falta evidência, o assistente reconhece a lacuna. Não há ferramentas de execução ou ações em sistemas externos. Essa validação impede fontes inventadas; **não prova por si só que cada afirmação está semanticamente correta**. Avaliação humana dos documentos e respostas continua necessária.
 
 ### Privacidade e limites
 
@@ -120,8 +124,8 @@ A IA recebe apenas trechos da equipe autorizada, a pergunta e histórico limitad
 - Remover participação revoga acesso aos endpoints de conteúdo. Administradores podem gerenciar equipes; ingresso explícito em equipe para consulta é auditado.
 - Excluir um documento o remove da busca imediatamente e agenda a remoção do arquivo e dos trechos. O texto de respostas já geradas pode permanecer no histórico privado; a fonte excluída fica indisponível.
 - O provedor externo de IA processa conteúdo dos trechos, perguntas e contexto. Só envie documentos apropriados a esse processamento. Segredos do servidor não entram no navegador.
-- Dez gerações por minuto por usuário, timeout de 45 segundos e até 2.000 tokens por resposta. O limite da autenticação usa a memória da instância; implantação distribuída precisaria de coordenação desse limite.
-- Não há OCR, versão de documento, recuperação de senha por email, integrações, notificações externas, cobrança ou administração comercial.
+- Dez gerações por minuto por usuário, timeout de 45 segundos e até 12.000 caracteres por resposta validada. O limite da autenticação usa a memória da instância; implantação distribuída precisaria de coordenação desse limite.
+- Não há OCR, versão de documento, recuperação de senha por email, integrações operacionais, notificações externas, cobrança ou administração comercial.
 - Esta entrega é uma aplicação de portfólio. Para exposição pública com dados reais, acrescente verificação de email, política de retenção, isolamento de recursos de extração e operação monitorada.
 
 ## Verificar
@@ -160,6 +164,6 @@ docs/                    Desenho aprovado, plano e capturas
 
 ## Referências técnicas
 
-[Next.js App Router](https://nextjs.org/docs/app), [Better Auth](https://better-auth.com/docs/installation), [Drizzle e vetores](https://orm.drizzle.team/docs/extensions), [OpenAI embeddings](https://developers.openai.com/api/reference/typescript/resources/embeddings), [PGlite](https://pglite.dev/).
+[Next.js App Router](https://nextjs.org/docs/app), [Better Auth](https://better-auth.com/docs/installation), [Drizzle e vetores](https://orm.drizzle.team/docs/extensions), [Toqan API](https://toqan-api.readme.io/reference), [PGlite](https://pglite.dev/).
 
 Identidade visual fornecida para o KnowFlow AI, direção v3. A licença de distribuição ainda não foi definida pelo autor.

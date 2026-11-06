@@ -78,3 +78,15 @@ it("keeps requests private to their author and team managers", () => {
   expect(() => assertRequestAccess("alice", "alice", "member")).not.toThrow();
   expect(() => assertRequestAccess("alice", "bob", "manager")).not.toThrow();
 });
+
+it.each(["2020-01-01T00:00:00Z", "invalid-date"])(
+  "rejects expired or invalid invitation dates returned as text: %s",
+  (expiresAt) => {
+    expect(() =>
+      assertInvitation(
+        { email: "test@example.test", expiresAt, acceptedAt: null },
+        "test@example.test",
+      ),
+    ).toThrow();
+  },
+);

@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
+  outputDir: "./test-results/demo",
   testMatch: "knowflow.spec.ts",
   fullyParallel: false,
   use: { baseURL: "http://localhost:3000", trace: "retain-on-failure" },

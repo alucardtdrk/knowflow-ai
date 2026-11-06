@@ -7,6 +7,14 @@ import { assertInvitation } from "@/lib/policy";
 import { AppError } from "@/lib/errors";
 import type { Actor, Scope, TeamRole } from "@/lib/types";
 
+import type { PendingInvitation } from "@/lib/workspace";
+
+export async function listPendingInvitations(actor: Actor) {
+  return rows<PendingInvitation>(
+    sql`SELECT i.id,i.team_id AS "teamId",t.name AS "teamName",o.name AS "organizationName",i.role FROM invitations i JOIN teams t ON t.id=i.team_id AND t.organization_id=i.organization_id JOIN organizations o ON o.id=i.organization_id JOIN "user" u ON lower(u.email)=lower(i.email) WHERE u.id=${actor.userId} AND i.accepted_at IS NULL AND i.expires_at>now() ORDER BY o.name,t.name`,
+  );
+}
+
 const nameSchema = z.string().trim().min(2).max(80);
 export async function joinTeamAsAdmin(actor: Actor, scope: Scope) {
   await requireAdmin(actor, scope.organizationId);
@@ -89,9 +97,8 @@ export async function inviteMember(
   return `${process.env.BETTER_AUTH_URL || "http://localhost:3000"}/invite/${token}`;
 }
 export async function acceptInvitation(actor: Actor, token: string) {
-  z.string()
-    .regex(/^[a-f0-9]{64}$/)
-    .parse(token);
+  z.union([z.string().regex(/^[a-f0-9]{64}$/), z.uuid()]).parse(token);
+  const byId = z.uuid().safeParse(token).success;
   const hash = createHash("sha256").update(token).digest("hex");
   return getDb().transaction(async (tx) => {
     const [invite] = await rows<
@@ -103,7 +110,7 @@ export async function acceptInvitation(actor: Actor, token: string) {
         acceptedAt: Date | null;
       }
     >(
-      sql`SELECT id,organization_id AS "organizationId",team_id AS "teamId",email,role,expires_at AS "expiresAt",accepted_at AS "acceptedAt" FROM invitations WHERE token_hash=${hash} FOR UPDATE`,
+      sql`SELECT id,organization_id AS "organizationId",team_id AS "teamId",email,role,expires_at AS "expiresAt",accepted_at AS "acceptedAt" FROM invitations WHERE ${byId ? sql`id=${token}` : sql`token_hash=${hash}`} FOR UPDATE`,
       tx,
     );
     const [user] = await rows<{ email: string }>(

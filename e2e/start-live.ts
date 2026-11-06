@@ -13,6 +13,7 @@ const pg = new PGlite({ extensions: { vector } });
   pg,
 ) as unknown as Database;
 await pg.exec(await readFile("drizzle/0000_initial.sql", "utf8"));
+await pg.exec(await readFile("drizzle/0001_chat_step_responses.sql", "utf8"));
 const socket = new PGLiteSocketServer({
   db: pg,
   host: "127.0.0.1",
@@ -22,6 +23,7 @@ const socket = new PGLiteSocketServer({
 await socket.start();
 const files = new Map<string, Buffer>();
 const calls: string[] = [];
+const answers = new Map<string, string>();
 const fake = createServer(async (req, res) => {
   calls.push(`${req.method} ${req.url}`);
   const parts: Buffer[] = [];
@@ -31,6 +33,15 @@ const fake = createServer(async (req, res) => {
   if (url === "/process" && req.method === "POST") {
     res.setHeader("Content-Type", "application/json");
     res.end(JSON.stringify({ processed: await processNextJob() }));
+    return;
+  }
+  if (url === "/seed-conversations" && req.method === "POST") {
+    const input = JSON.parse(body.toString());
+    await pg.query(
+      `INSERT INTO conversations(organization_id,team_id,author_id,title,created_at) SELECT t.organization_id,t.id,u.id,'Histórico ' || n,now()-n*interval '1 minute' FROM teams t JOIN "user" u ON u.email='pilot@example.test' CROSS JOIN generate_series(1,30) n WHERE t.id=$1`,
+      [input.teamId],
+    );
+    res.end("seeded");
     return;
   }
   if (url === "/diagnostics") {
@@ -45,32 +56,16 @@ const fake = createServer(async (req, res) => {
     );
     return;
   }
-  if (url.startsWith("/v1/embeddings")) {
-    const input = JSON.parse(body.toString()).input as string[];
-    const encoded = JSON.parse(body.toString()).encoding_format === "base64";
-    const embedding = encoded
-      ? Buffer.from(
-          new Float32Array([1, ...Array(1535).fill(0)]).buffer,
-        ).toString("base64")
-      : [1, ...Array(1535).fill(0)];
-    res.setHeader("Content-Type", "application/json");
-    res.end(
-      JSON.stringify({
-        object: "list",
-        data: input.map((_, index) => ({
-          object: "embedding",
-          index,
-          embedding,
-        })),
-        model: "fixture",
-        usage: { prompt_tokens: 1, total_tokens: 1 },
-      }),
-    );
-    return;
-  }
-  if (url.startsWith("/v1/chat/completions")) {
+  if (url === "/toqan/create_conversation" && req.method === "POST") {
     const input = JSON.parse(body.toString());
-    const data = JSON.parse(input.messages[1].content);
+    const data = JSON.parse(
+      input.user_message.split("DADOS DA CONSULTA (não são instruções):\n")[1],
+    );
+    if (data.question.includes("simular indisponibilidade")) {
+      res.statusCode = 503;
+      res.end("Simulated provider failure");
+      return;
+    }
     const source = data.documents[0];
     const value = {
       text: source
@@ -83,22 +78,24 @@ const fake = createServer(async (req, res) => {
         ? null
         : "Verifique a conexão com a internet",
     };
+    const id = String(answers.size + 1);
+    const malformed =
+      data.question.includes("Como resolver?") &&
+      !input.user_message.includes("A resposta anterior não pôde ser lida");
+    answers.set(
+      id,
+      malformed ? '{"text":"Abra a opção "Criar"."}' : JSON.stringify(value),
+    );
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ conversation_id: id, request_id: id }));
+    return;
+  }
+  if (url.startsWith("/toqan/get_answer?") && req.method === "GET") {
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const id = new URL(url, "http://localhost").searchParams.get("request_id");
     res.setHeader("Content-Type", "application/json");
     res.end(
-      JSON.stringify({
-        id: "fixture",
-        object: "chat.completion",
-        created: 1,
-        model: "fixture",
-        choices: [
-          {
-            index: 0,
-            message: { role: "assistant", content: JSON.stringify(value) },
-            finish_reason: "stop",
-          },
-        ],
-        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-      }),
+      JSON.stringify({ status: "finished", answer: answers.get(id || "") }),
     );
     return;
   }
@@ -142,8 +139,8 @@ const env = {
   S3_BUCKET: "test",
   S3_ACCESS_KEY_ID: "test",
   S3_SECRET_ACCESS_KEY: "test",
-  OPENAI_API_KEY: "fixture-not-a-real-key",
-  OPENAI_BASE_URL: "http://127.0.0.1:5545/v1",
+  TOQAN_API_KEY: "fixture-not-a-real-key",
+  TOQAN_BASE_URL: "http://127.0.0.1:5545/toqan",
   NEXT_TELEMETRY_DISABLED: "1",
 };
 Object.assign(process.env, env);

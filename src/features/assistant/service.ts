@@ -26,15 +26,12 @@ export async function answer(
     })
     .parse(input);
   await requireTeamAccess(actor, scope);
+  let pendingStep: { id: string; instruction: string } | undefined;
   if (input.conversationId) {
     await ownConversation(actor, scope, input.conversationId);
-    const [pending] = await rows(
-      sql`SELECT id FROM guided_steps WHERE conversation_id=${input.conversationId} AND result IS NULL`,
+    [pendingStep] = await rows<{ id: string; instruction: string }>(
+      sql`SELECT id,instruction FROM guided_steps WHERE conversation_id=${input.conversationId} AND result IS NULL`,
     );
-    if (pending)
-      throw new AppError(
-        "Informe o resultado da etapa atual antes de continuar.",
-      );
   }
   const [limit] = await rows(
     sql`INSERT INTO generation_limits(user_id,window_start,count) VALUES (${actor.userId},date_trunc('minute',now()),1) ON CONFLICT(user_id,window_start) DO UPDATE SET count=generation_limits.count+1 WHERE generation_limits.count<10 RETURNING count`,
@@ -49,6 +46,11 @@ export async function answer(
         sql`SELECT role,content FROM (SELECT role,content,sequence FROM messages WHERE conversation_id=${input.conversationId} ORDER BY sequence DESC LIMIT 12) h ORDER BY sequence`,
       )
     : [];
+  if (pendingStep)
+    history.push({
+      role: "assistant",
+      content: `Etapa aguardando resposta: ${pendingStep.instruction}`,
+    });
   const [original] = input.conversationId
     ? await rows<{ title: string }>(
         sql`SELECT title FROM conversations WHERE id=${input.conversationId}`,
@@ -79,13 +81,18 @@ export async function answer(
       await tx.execute(
         sql`SELECT id FROM conversations WHERE id=${conversationId} FOR UPDATE`,
       );
-      const [pending] = await rows(
-        sql`SELECT id FROM guided_steps WHERE conversation_id=${conversationId} AND result IS NULL`,
+      const [pending] = await rows<{ id: string }>(
+        sql`SELECT id FROM guided_steps WHERE conversation_id=${conversationId} AND result IS NULL FOR UPDATE`,
         tx,
       );
-      if (pending)
+      if (pending?.id !== pendingStep?.id)
         throw new AppError(
-          "Outra resposta já criou uma etapa. Atualize a conversa.",
+          "A etapa mudou durante a consulta. Atualize a conversa.",
+          409,
+        );
+      if (pending)
+        await tx.execute(
+          sql`UPDATE guided_steps SET result='answered' WHERE id=${pending.id}`,
         );
     }
     await tx.execute(
@@ -141,4 +148,17 @@ export async function recordStepResult(
       sql`INSERT INTO messages(conversation_id,role,content) VALUES (${step.conversation_id},'user',${`Etapa: ${step.instruction}\nResultado: ${description}`})`,
     );
   });
+}
+
+export async function deleteConversation(
+  actor: Actor,
+  scope: Scope,
+  id: string,
+) {
+  z.uuid().parse(id);
+  await requireTeamAccess(actor, scope);
+  const [deleted] = await rows(
+    sql`DELETE FROM conversations WHERE id=${id} AND organization_id=${scope.organizationId} AND team_id=${scope.teamId} AND author_id=${actor.userId} RETURNING id`,
+  );
+  if (!deleted) throw new AppError("Conversa não encontrada.", 404);
 }

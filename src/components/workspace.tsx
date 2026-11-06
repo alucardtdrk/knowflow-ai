@@ -1,12 +1,17 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useSyncExternalStore } from "react";
 import Link from "next/link";
+import { flushSync } from "react-dom";
 import { useRouter } from "next/navigation";
 import Markdown from "react-markdown";
 import { createAuthClient } from "better-auth/react";
 import {
   Home,
+  Sun,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
   BookOpen,
   MessagesSquare,
   Inbox,
@@ -50,9 +55,10 @@ import type {
 import type { Source, RequestStatus } from "@/lib/types";
 import { demoConversation } from "@/lib/demo";
 import { buildRequestSummary } from "@/lib/handoff";
-import { KnowledgeScene } from "./knowledge-scene";
+import { PendingInvitations } from "./onboarding";
 import {
   loadWorkspace,
+  deleteConversationAction,
   askAction,
   stepAction,
   uploadAction,
@@ -161,13 +167,90 @@ export function Workspace({
     [inviteLink, setInviteLink] = useState("");
   const [draftTitle, setDraftTitle] = useState(""),
     [draftSummary, setDraftSummary] = useState("");
+  const [deleteConversationId, setDeleteConversationId] = useState<
+    string | null
+  >(null);
+  const [sending, setSending] = useState(false);
+  const sendingRef = useRef(false);
+  const waitingRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (sending)
+      waitingRef.current?.scrollIntoView({
+        block: "nearest",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches
+          ? "instant"
+          : "smooth",
+      });
+  }, [sending]);
+  const [settingsSection, setSettingsSection] = useState("people");
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [sidebarHidden, setSidebarHidden] = useState(false);
+  const dark = useSyncExternalStore(
+    subscribeTheme,
+    () =>
+      localStorage.getItem("knowflow-theme") === "dark" ||
+      (!localStorage.getItem("knowflow-theme") &&
+        window.matchMedia("(prefers-color-scheme: dark)").matches),
+    () => false,
+  );
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+  }, [dark]);
+  const themeTransition = useRef(false);
+  function toggleTheme() {
+    if (themeTransition.current) return;
+    const update = () => {
+      flushSync(() => {
+        const theme = dark ? "light" : "dark";
+        document.documentElement.dataset.theme = theme;
+        localStorage.setItem("knowflow-theme", theme);
+        window.dispatchEvent(new Event("knowflow-theme-change"));
+      });
+    };
+    if (
+      !document.startViewTransition ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ) {
+      update();
+      return;
+    }
+    themeTransition.current = true;
+    const transition = document.startViewTransition(update);
+    void transition.finished
+      .catch(() => {})
+      .finally(() => {
+        themeTransition.current = false;
+      });
+  }
   const fileRef = useRef<HTMLInputElement>(null);
   const demoSpaces = useRef<Record<string, WorkspaceData>>({});
   const active = data.conversations.find((c) => c.id === activeId);
   const isRh = data.scope.teamId === "demo-rh";
+  const suggestions = demo
+    ? isRh
+      ? ["Como solicitar férias", "Como funciona o reembolso?"]
+      : ["Minha VPN não conecta", "Como solicitar um acesso?"]
+    : data.documents
+        .filter((d) => d.status === "ready")
+        .slice(0, 2)
+        .map((d) => `O que diz o documento "${d.title}"?`);
   const pending = active?.steps.find((s) => s.result === null);
-  async function refresh() {
-    if (!demo) setData(await loadWorkspace(data.scope.teamId));
+  const recentConversations = data.conversations.slice(0, 2);
+  const awaitingConfirmation = data.requests
+    .filter((r) => r.authorId === data.user.id && r.status === "resolved")
+    .slice(0, 2);
+  async function refresh(
+    conversationId: string | null = activeId,
+    page = data.conversationPage || 1,
+  ) {
+    if (!demo)
+      setData(
+        await loadWorkspace(
+          data.scope.teamId,
+          page,
+          conversationId || undefined,
+        ),
+      );
   }
   async function run(fn: () => Promise<void>) {
     setBusy(true);
@@ -182,6 +265,8 @@ export function Workspace({
     }
   }
   function move(next: View) {
+    if (next === "home" && !demo && (data.conversationPage || 1) !== 1)
+      void run(() => refresh(null, 1));
     setView(next);
     setMobile(false);
     setSearch("");
@@ -190,8 +275,16 @@ export function Workspace({
     setRequestDetail(null);
   }
   function openConversation(c: ConversationItem) {
-    setActiveId(c.id);
-    move("conversation");
+    if (demo) {
+      setActiveId(c.id);
+      move("conversation");
+      return;
+    }
+    void run(async () => {
+      await refresh(c.id);
+      setActiveId(c.id);
+      move("conversation");
+    });
   }
   function openDemo(kind: "vpn" | "rh") {
     const conversation = demoConversation(kind);
@@ -213,20 +306,76 @@ export function Workspace({
       );
       return;
     }
-    if (message.trim().length < 2) return;
+    if (message.trim().length < 2 || sendingRef.current) return;
+    const conversationId =
+      view === "conversation" && activeId ? activeId : undefined;
+    const optimisticId = crypto.randomUUID();
+    const targetId = conversationId || crypto.randomUUID();
+    sendingRef.current = true;
+    setSending(true);
+    setQuery("");
+    setActiveId(targetId);
+    setView("conversation");
+    const optimisticMessage = {
+      id: optimisticId,
+      role: "user" as const,
+      content: message,
+      sources: [],
+    };
+    setData((d) => ({
+      ...d,
+      conversations: conversationId
+        ? d.conversations.map((c) =>
+            c.id === targetId
+              ? { ...c, messages: [...c.messages, optimisticMessage] }
+              : c,
+          )
+        : [
+            {
+              id: targetId,
+              title: message.slice(0, 120),
+              messages: [optimisticMessage],
+              steps: [],
+            },
+            ...d.conversations,
+          ],
+    }));
     await run(async () => {
-      const result = await askAction(data.scope, {
-        message,
-        conversationId:
-          view === "conversation" && activeId ? activeId : undefined,
-      });
-      if (!result.ok) throw new Error(result.error);
-      await refresh();
-      setActiveId(result.data.conversationId);
-      setView("conversation");
-      setQuery("");
+      try {
+        const result = await askAction(data.scope, { message, conversationId });
+        if (!result.ok) throw new Error(result.error);
+        await refresh(
+          result.data.conversationId,
+          conversationId ? data.conversationPage || 1 : 1,
+        );
+        setActiveId(result.data.conversationId);
+      } catch (error) {
+        setData((d) => ({
+          ...d,
+          conversations: conversationId
+            ? d.conversations.map((c) =>
+                c.id === targetId
+                  ? {
+                      ...c,
+                      messages: c.messages.filter((m) => m.id !== optimisticId),
+                    }
+                  : c,
+              )
+            : d.conversations.filter((c) => c.id !== targetId),
+        }));
+        setQuery(message);
+        if (!conversationId) {
+          setActiveId(null);
+          setView("home");
+        }
+        throw error;
+      } finally {
+        sendingRef.current = false;
+        setSending(false);
+      }
     });
   }
+
   async function report(result: "worked" | "failed" | "unable") {
     if (!pending) return;
     if (demo) {
@@ -359,45 +508,109 @@ export function Workspace({
       }
     });
   }
-  useEffect(() => {
-    if (!source && !requestDraft && !upload && !deleteId) return;
-    const handle = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        setSource(null);
-        setRequestDraft(false);
-        setUpload(false);
-        setDeleteId(null);
-      }
-    };
-    document.addEventListener("keydown", handle);
-    return () => document.removeEventListener("keydown", handle);
-  }, [source, requestDraft, upload, deleteId]);
+  function switchTeam(t: WorkspaceData["teams"][number]) {
+    if (demo) {
+      demoSpaces.current[data.scope.teamId] = data;
+      const cached = demoSpaces.current[t.teamId];
+      const rh = t.teamId === "demo-rh";
+      setData(
+        (d) =>
+          cached || {
+            ...d,
+            scope: {
+              organizationId: t.organizationId,
+              teamId: t.teamId,
+            },
+            teamName: t.name,
+            teamDescription: rh
+              ? "Orientação para cuidar de quem faz a equipe acontecer."
+              : "Um lugar para encontrar respostas e seguir em frente.",
+            conversations: [],
+            requests: rh ? [] : initial.requests,
+            documents: rh
+              ? d.documents.map((doc, i) => ({
+                  ...doc,
+                  title: [
+                    "Guia de solicitação de férias",
+                    "Manual da pessoa colaboradora",
+                    "Processo de reembolso",
+                    "Como falar com a equipe",
+                  ][i],
+                }))
+              : initial.documents,
+          },
+      );
+      setActiveId(null);
+      move("home");
+    } else router.push(`/app/${t.teamId}`);
+  }
   const docs = data.documents.filter((d) =>
     d.title.toLowerCase().includes(search.toLowerCase()),
   );
   const request = data.requests.find((r) => r.id === requestDetail);
   return (
-    <div className="workspace">
+    <div className={`workspace ${sidebarHidden ? "sidebar-hidden" : ""}`}>
       <a className="skip-link" href="#main-content">
         Pular para o conteúdo
       </a>
       <aside className={`sidebar ${mobile ? "is-open" : ""}`}>
         <div className="sidebar-top">
+          <button
+            className="icon-button sidebar-hide"
+            aria-label="Recolher menu lateral"
+            onClick={() => {
+              setSidebarHidden(true);
+              setMobile(false);
+            }}
+          >
+            <PanelLeftClose size={18} />
+          </button>
           <Link href={demo ? "/demo" : "/app"} className="brand">
             <img src="/brand/knowflow-wordmark.svg" alt="KnowFlow AI" />
           </Link>
           <p className="brand-tagline">Conhecimento que resolve.</p>
         </div>
-        <div className="organization-switch">
-          <span className="org-avatar">
-            {data.organizationName.slice(0, 1)}
-          </span>
-          <div>
-            <strong>{data.organizationName}</strong>
-            <span>Seu espaço de trabalho</span>
-          </div>
-          <ChevronDown size={14} />
-        </div>
+        <details className="organization-picker">
+          <summary
+            className="organization-switch"
+            aria-label="Trocar espaço ou equipe"
+          >
+            <span className="org-avatar">
+              {data.organizationName.slice(0, 1)}
+            </span>
+            <div>
+              <strong>{data.organizationName}</strong>
+              <span>Seu espaço de trabalho</span>
+            </div>
+            <ChevronDown size={14} />
+          </summary>
+          <nav className="organization-options" aria-label="Espaços e equipes">
+            {data.teams.map((team) => (
+              <Link
+                key={team.teamId}
+                href={demo ? "/demo" : `/app/${team.teamId}`}
+                aria-current={
+                  team.teamId === data.scope.teamId ? "page" : undefined
+                }
+                onClick={(event) => {
+                  event.currentTarget
+                    .closest("details")
+                    ?.removeAttribute("open");
+                  if (demo) {
+                    event.preventDefault();
+                    switchTeam(team);
+                  }
+                }}
+              >
+                <strong>{team.organizationName}</strong>
+                <span>{team.name}</span>
+                {team.teamId === data.scope.teamId && (
+                  <Check size={14} aria-hidden="true" />
+                )}
+              </Link>
+            ))}
+          </nav>
+        </details>
         <div className="sidebar-label">ESPAÇO DE TRABALHO</div>
         <nav aria-label="Navegação principal">
           {nav.map((n) => (
@@ -421,7 +634,13 @@ export function Workspace({
         <div className="sidebar-label teams-label">
           SUAS EQUIPES{" "}
           {data.isAdmin && (
-            <button aria-label="Criar equipe" onClick={() => move("settings")}>
+            <button
+              aria-label="Criar equipe"
+              onClick={() => {
+                setSettingsSection("teams");
+                move("settings");
+              }}
+            >
               <Plus size={15} />
             </button>
           )}
@@ -432,42 +651,7 @@ export function Workspace({
               key={t.teamId}
               className={`team-item ${t.teamId === data.scope.teamId ? "selected" : ""}`}
               aria-current={t.teamId === data.scope.teamId ? "true" : undefined}
-              onClick={() => {
-                if (demo) {
-                  demoSpaces.current[data.scope.teamId] = data;
-                  const cached = demoSpaces.current[t.teamId];
-                  const rh = t.teamId === "demo-rh";
-                  setData(
-                    (d) =>
-                      cached || {
-                        ...d,
-                        scope: {
-                          organizationId: t.organizationId,
-                          teamId: t.teamId,
-                        },
-                        teamName: t.name,
-                        teamDescription: rh
-                          ? "Orientação para cuidar de quem faz a equipe acontecer."
-                          : "Um lugar para encontrar respostas e seguir em frente.",
-                        conversations: [],
-                        requests: rh ? [] : initial.requests,
-                        documents: rh
-                          ? d.documents.map((doc, i) => ({
-                              ...doc,
-                              title: [
-                                "Guia de solicitação de férias",
-                                "Manual da pessoa colaboradora",
-                                "Processo de reembolso",
-                                "Como falar com a equipe",
-                              ][i],
-                            }))
-                          : initial.documents,
-                      },
-                  );
-                  setActiveId(null);
-                  move("home");
-                } else router.push(`/app/${t.teamId}`);
-              }}
+              onClick={() => switchTeam(t)}
             >
               <span
                 className={`team-square ${t.teamId === data.scope.teamId ? "terracotta" : ""}`}
@@ -548,6 +732,16 @@ export function Workspace({
       )}
       <div className="workspace-body">
         <header className="topbar">
+          {sidebarHidden && (
+            <button
+              className="icon-button desktop-sidebar-toggle"
+              aria-label="Mostrar menu lateral"
+              aria-expanded={false}
+              onClick={() => setSidebarHidden(false)}
+            >
+              <PanelLeftOpen size={19} />
+            </button>
+          )}
           <button
             className="mobile-menu icon-button"
             aria-label="Abrir menu"
@@ -561,6 +755,13 @@ export function Workspace({
             <strong>{data.teamName}</strong>
           </div>
           <div className="topbar-right">
+            <button
+              className="icon-button theme-toggle"
+              onClick={toggleTheme}
+              aria-label={dark ? "Ativar modo claro" : "Ativar modo escuro"}
+            >
+              {dark ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
             <span className="private-label">
               <ShieldCheck size={14} /> Espaço da equipe
             </span>
@@ -591,6 +792,7 @@ export function Workspace({
           className={`main-content view-${view} view-surface`}
           key={view}
         >
+          {!demo && <PendingInvitations invitations={data.invitations || []} />}
           {notice && (
             <div className="notice" role="status">
               <CheckCircle2 size={17} />
@@ -641,7 +843,61 @@ export function Workspace({
                     e siga em frente.
                   </p>
                 </div>
-                <KnowledgeScene />
+                <section
+                  className="resume-panel"
+                  aria-label="Continuar de onde parou"
+                >
+                  <h2>Continuar de onde parou</h2>
+                  {awaitingConfirmation.map((r) => (
+                    <button
+                      key={r.id}
+                      className="resume-item"
+                      onClick={() => {
+                        move("requests");
+                        setRequestDetail(r.id);
+                      }}
+                    >
+                      <Inbox size={18} aria-hidden="true" />
+                      <span>
+                        <strong>{r.title}</strong>
+                        <small>
+                          Solução proposta · aguardando sua confirmação
+                        </small>
+                      </span>
+                      <ArrowUpRight size={16} aria-hidden="true" />
+                    </button>
+                  ))}
+                  {recentConversations.map((c) => (
+                    <button
+                      key={c.id}
+                      className="resume-item"
+                      onClick={() => openConversation(c)}
+                    >
+                      <MessagesSquare size={18} aria-hidden="true" />
+                      <span>
+                        <strong>{c.title}</strong>
+                        <small>Continuar conversa</small>
+                      </span>
+                      <ArrowUpRight size={16} aria-hidden="true" />
+                    </button>
+                  ))}
+                  {!recentConversations.length &&
+                    !awaitingConfirmation.length && (
+                      <p>
+                        Suas conversas recentes e solicitações aguardando
+                        confirmação aparecerão aqui. Comece com uma pergunta
+                        abaixo.
+                      </p>
+                    )}
+                  {!!recentConversations.length && (
+                    <button
+                      className="text-link"
+                      onClick={() => move("conversations")}
+                    >
+                      Ver minhas conversas <ArrowRight size={14} />
+                    </button>
+                  )}
+                </section>
                 <form
                   className="ask-box"
                   onSubmit={(e) => {
@@ -683,28 +939,27 @@ export function Workspace({
                     </button>
                   </div>
                 </form>
-                <div className="suggestions">
-                  <span>Comece por aqui</span>
-                  {(isRh
-                    ? ["Como solicitar férias", "Como funciona o reembolso?"]
-                    : ["Minha VPN não conecta", "Como solicitar um acesso?"]
-                  ).map((q, i) => (
-                    <button
-                      key={q}
-                      onClick={() =>
-                        demo ? openDemo(isRh ? "rh" : "vpn") : void ask(q)
-                      }
-                    >
-                      {i === 0 ? (
-                        <Compass size={13} />
-                      ) : (
-                        <CircleHelp size={13} />
-                      )}{" "}
-                      {q}
-                      <ArrowUpRight size={12} />
-                    </button>
-                  ))}
-                </div>
+                {!!suggestions.length && (
+                  <div className="suggestions">
+                    <span>Comece por aqui</span>
+                    {suggestions.map((q, i) => (
+                      <button
+                        key={q}
+                        onClick={() =>
+                          demo ? openDemo(isRh ? "rh" : "vpn") : void ask(q)
+                        }
+                      >
+                        {i === 0 ? (
+                          <Compass size={13} />
+                        ) : (
+                          <CircleHelp size={13} />
+                        )}{" "}
+                        {q}
+                        <ArrowUpRight size={12} />
+                      </button>
+                    ))}
+                  </div>
+                )}
               </section>
               <section className="how-row" aria-label="Como funciona">
                 <div>
@@ -816,37 +1071,6 @@ export function Workspace({
                   </div>
                 </section>
               </div>
-              <section className="activity-section">
-                <div className="section-heading">
-                  <h2>Continue de onde parou</h2>
-                  <button
-                    className="text-link"
-                    onClick={() => move("conversations")}
-                  >
-                    Minhas conversas <ArrowUpRight size={14} />
-                  </button>
-                </div>
-                {data.conversations.length ? (
-                  <div className="recent-grid">
-                    {data.conversations.slice(0, 3).map((c) => (
-                      <button
-                        className="recent-card"
-                        key={c.id}
-                        onClick={() => openConversation(c)}
-                      >
-                        <MessagesSquare size={18} />
-                        <strong>{c.title}</strong>
-                        <ArrowUpRight size={15} />
-                      </button>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="quiet-empty">
-                    Suas conversas aparecerão aqui. Um bom próximo passo começa
-                    com uma pergunta.
-                  </p>
-                )}
-              </section>
             </>
           )}
           {view === "documents" && (
@@ -1054,20 +1278,32 @@ export function Workspace({
               <div className="conversation-list">
                 {data.conversations.length ? (
                   data.conversations.map((c) => (
-                    <button
-                      className="conversation-list-item"
-                      key={c.id}
-                      onClick={() => openConversation(c)}
-                    >
-                      <span className="round-icon">
-                        <MessagesSquare size={20} />
-                      </span>
-                      <div>
-                        <h3>{c.title}</h3>
-                        <p>{c.messages.at(-1)?.content.slice(0, 120)}</p>
-                      </div>
-                      <ArrowUpRight size={18} />
-                    </button>
+                    <div className="conversation-list-row" key={c.id}>
+                      <button
+                        className="conversation-list-item"
+                        onClick={() => openConversation(c)}
+                      >
+                        <span className="round-icon">
+                          <MessagesSquare size={20} />
+                        </span>
+                        <div>
+                          <h3>{c.title}</h3>
+                          <p>
+                            {c.preview ||
+                              c.messages.at(-1)?.content.slice(0, 120)}
+                          </p>
+                        </div>
+                        <ArrowUpRight size={18} />
+                      </button>
+                      <button
+                        className="icon-button conversation-delete"
+                        aria-label={`Excluir conversa: ${c.title}`}
+                        disabled={busy || sending}
+                        onClick={() => setDeleteConversationId(c.id)}
+                      >
+                        <Trash2 size={17} />
+                      </button>
+                    </div>
                   ))
                 ) : (
                   <Empty
@@ -1077,6 +1313,44 @@ export function Workspace({
                   />
                 )}
               </div>
+              {!demo && (data.conversationTotal || 0) > 10 && (
+                <nav
+                  className="conversation-pagination"
+                  aria-label="Paginação das conversas"
+                >
+                  <button
+                    className="button secondary"
+                    disabled={busy || (data.conversationPage || 1) === 1}
+                    onClick={() =>
+                      void run(() =>
+                        refresh(null, (data.conversationPage || 1) - 1),
+                      )
+                    }
+                  >
+                    Anterior
+                  </button>
+                  <span>
+                    Página {data.conversationPage || 1} de{" "}
+                    {Math.ceil((data.conversationTotal || 0) / 10)} ·{" "}
+                    {data.conversationTotal} conversas
+                  </span>
+                  <button
+                    className="button secondary"
+                    disabled={
+                      busy ||
+                      (data.conversationPage || 1) >=
+                        Math.ceil((data.conversationTotal || 0) / 10)
+                    }
+                    onClick={() =>
+                      void run(() =>
+                        refresh(undefined, (data.conversationPage || 1) + 1),
+                      )
+                    }
+                  >
+                    Próxima
+                  </button>
+                </nav>
+              )}
             </>
           )}
           {view === "conversation" && active && (
@@ -1148,6 +1422,20 @@ export function Workspace({
                       )}
                     </article>
                   ))}
+                  {sending && (
+                    <div
+                      className="message assistant-waiting"
+                      role="status"
+                      ref={waitingRef}
+                    >
+                      <span className="waiting-brand" aria-hidden="true">
+                        <img src="/brand/knowflow-symbol.svg" alt="" />
+                      </span>
+                      <span>
+                        Consultando os documentos e preparando a resposta…
+                      </span>
+                    </div>
+                  )}
                   {active.steps.length > 0 && (
                     <div className="guided-card">
                       <div className="guided-header">
@@ -1178,7 +1466,9 @@ export function Workspace({
                                   ? "funcionou"
                                   : s.result === "failed"
                                     ? "não resolveu"
-                                    : "não foi possível realizar"}
+                                    : s.result === "answered"
+                                      ? "respondida pelo chat"
+                                      : "não foi possível realizar"}
                               </span>
                             ) : (
                               <>
@@ -1241,12 +1531,12 @@ export function Workspace({
                       aria-label="Continuar conversa"
                       placeholder={
                         pending
-                          ? "Informe o resultado da etapa para continuar"
+                          ? "Conte o resultado ou tire uma dúvida sobre a etapa..."
                           : "Acrescente contexto ou faça outra pergunta..."
                       }
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
-                      disabled={!!pending || busy}
+                      disabled={busy}
                       minLength={2}
                       maxLength={4000}
                       required
@@ -1254,7 +1544,7 @@ export function Workspace({
                     <button
                       className="icon-button"
                       aria-label="Enviar mensagem"
-                      disabled={!!pending || busy}
+                      disabled={busy}
                     >
                       {busy ? (
                         <LoaderCircle className="spin" size={20} />
@@ -1311,7 +1601,7 @@ export function Workspace({
               <PageHeading
                 eyebrow="DO CONTEXTO À RESOLUÇÃO"
                 title="Nenhum problema fica solto."
-                description="Orientação e atendimento humano, com o contexto no mesmo lugar."
+                description="Peça ajuda humana quando a orientação não for suficiente. Acompanhe o atendimento da equipe e confirme quando o problema estiver resolvido."
                 action={
                   <button
                     className="button primary"
@@ -1325,6 +1615,10 @@ export function Workspace({
                   </button>
                 }
               />
+              <p className="small muted">
+                Aberta → Em atendimento → Solução proposta → Encerrada. A equipe
+                propõe a solução; quem solicitou confirma o encerramento.
+              </p>
               {request ? (
                 <section className="panel request-detail">
                   <button
@@ -1348,6 +1642,33 @@ export function Workspace({
                     </span>
                     <span>{date(request.createdAt)}</span>
                   </div>
+                  {request.status === "resolved" && (
+                    <div className="notice" role="status">
+                      <div>
+                        <strong>
+                          {request.authorId === data.user.id
+                            ? "A equipe propôs uma solução. Funcionou para você?"
+                            : `Aguardando confirmação de ${request.authorName}.`}
+                        </strong>
+                        <p>
+                          Somente quem abriu a solicitação pode confirmar a
+                          resolução e encerrá-la. Se o problema continuar,
+                          registre um comentário para a equipe.
+                        </p>
+                      </div>
+                      {request.authorId === data.user.id && (
+                        <button
+                          className="button primary"
+                          disabled={busy}
+                          onClick={() =>
+                            void updateRequest(request.id, { status: "closed" })
+                          }
+                        >
+                          <Check size={16} /> Confirmar resolução e encerrar
+                        </button>
+                      )}
+                    </div>
+                  )}
                   <div className="request-controls">
                     <label>
                       Status
@@ -1388,6 +1709,10 @@ export function Workspace({
                     {data.role === "manager" && (
                       <label>
                         Responsável
+                        <span className="small muted">
+                          Gestores podem atribuir a solicitação a outros
+                          gestores desta equipe.
+                        </span>
                         <select
                           aria-label="Responsável"
                           value={request.assigneeId || ""}
@@ -1482,211 +1807,264 @@ export function Workspace({
             <>
               <PageHeading
                 eyebrow="SEU ESPAÇO, BEM ORGANIZADO"
-                title="Pessoas e permissões."
-                description="Conhecimento compartilhado com quem precisa ter acesso."
+                title="Configurações."
+                description="Gerencie pessoas, equipes e seu espaço de trabalho."
               />
-              <div className="settings-grid">
-                <section className="panel settings-section">
-                  <div className="section-heading">
-                    <h2>{data.teamName}</h2>
-                    <span className="badge">
-                      <Users size={13} />
-                      {data.members.length} pessoas
-                    </span>
-                  </div>
-                  {data.members.map((m) => (
-                    <div className="member-row" key={m.id}>
-                      <span className="avatar">
-                        {m.name
-                          .split(" ")
-                          .map((n) => n[0])
-                          .slice(0, 2)
-                          .join("")}
-                      </span>
-                      <div>
-                        <strong>{m.name}</strong>
-                        <span>{m.email}</span>
-                      </div>
-                      <span className="badge">
-                        {m.role === "manager" ? "Gestor" : "Membro"}
-                      </span>
-                      {!demo && data.role === "manager" && (
-                        <details className="member-menu">
-                          <summary aria-label={`Gerenciar ${m.name}`}>
-                            <MoreHorizontal size={17} />
-                          </summary>
-                          <button
-                            disabled={busy}
-                            onClick={() =>
-                              void run(async () => {
-                                const r = await memberAction(
-                                  data.scope,
-                                  m.id,
-                                  m.role === "manager" ? "member" : "manager",
-                                );
-                                if (!r.ok) throw new Error(r.error);
-                                await refresh();
-                              })
-                            }
-                          >
-                            {m.role === "manager"
-                              ? "Tornar membro"
-                              : "Tornar gestor"}
-                          </button>
-                          <button
-                            disabled={busy}
-                            onClick={() =>
-                              void run(async () => {
-                                const r = await memberAction(
-                                  data.scope,
-                                  m.id,
-                                  "remove",
-                                );
-                                if (!r.ok) throw new Error(r.error);
-                                if (m.id === data.user.id) router.push("/app");
-                                else await refresh();
-                              })
-                            }
-                          >
-                            Remover da equipe
-                          </button>
-                        </details>
-                      )}
-                    </div>
-                  ))}
-                  {data.role === "manager" && (
-                    <form
-                      className="settings-form"
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        if (demo) {
-                          setNotice(
-                            "Convites reais estão disponíveis na aplicação.",
-                          );
-                          return;
-                        }
-                        const f = new FormData(e.currentTarget);
-                        void run(async () => {
-                          const r = await inviteAction(
-                            data.scope,
-                            String(f.get("email")),
-                            f.get("role") as "member" | "manager",
-                          );
-                          if (!r.ok) throw new Error(r.error);
-                          setInviteLink(r.data);
-                        });
-                      }}
-                    >
-                      <h3>Convide alguém para esta equipe</h3>
-                      <label>
-                        Email
-                        <input
-                          name="email"
-                          type="email"
-                          required
-                          placeholder="pessoa@equipe.com"
-                        />
-                      </label>
-                      <label>
-                        Papel
-                        <select name="role">
-                          <option value="member">
-                            Membro — consulta e solicitações próprias
-                          </option>
-                          <option value="manager">
-                            Gestor — documentos, pessoas e atendimento
-                          </option>
-                        </select>
-                      </label>
-                      <button className="button secondary" disabled={busy}>
-                        <Plus size={15} />
-                        Gerar convite
-                      </button>
-                      {inviteLink && (
-                        <label>
-                          Link de convite · válido por 7 dias
-                          <input
-                            readOnly
-                            value={inviteLink}
-                            onFocus={(e) => e.target.select()}
-                          />
-                          <span className="small muted">
-                            Copie e compartilhe com o destinatário. Ele precisa
-                            entrar com o email informado.
-                          </span>
-                        </label>
-                      )}
-                    </form>
-                  )}
-                </section>
-                <aside>
-                  {data.isAdmin && !!data.organizationTeams?.length && (
+              <nav
+                className="settings-navigation"
+                aria-label="Seções das configurações"
+              >
+                {[
+                  ["people", "Pessoas e convites"],
+                  ["teams", "Equipes"],
+                  ["workspace", "Espaço de trabalho"],
+                ].map(([id, label]) => (
+                  <button
+                    key={id}
+                    aria-current={settingsSection === id ? "page" : undefined}
+                    onClick={() => setSettingsSection(id)}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </nav>
+              <div className="settings-content">
+                {settingsSection === "people" && (
+                  <>
+                    {" "}
                     <section className="panel settings-section">
-                      <h3>Equipes da organização</h3>
-                      <p className="small muted">
-                        Entrar concede acesso ao conteúdo e fica registrado na
-                        auditoria.
-                      </p>
-                      {data.organizationTeams.map((team) => (
-                        <div className="member-row" key={team.id}>
+                      <div className="section-heading">
+                        <h2>{data.teamName}</h2>
+                        {data.role === "manager" && (
+                          <button
+                            className="button primary"
+                            onClick={() => {
+                              setInviteLink("");
+                              setInviteOpen(true);
+                            }}
+                          >
+                            <Plus size={16} /> Convidar pessoa
+                          </button>
+                        )}
+                        <span className="badge">
+                          <Users size={13} />
+                          {data.members.length} pessoas
+                        </span>
+                      </div>
+                      {data.members.map((m) => (
+                        <div className="member-row" key={m.id}>
+                          <span className="avatar">
+                            {m.name
+                              .split(" ")
+                              .map((n) => n[0])
+                              .slice(0, 2)
+                              .join("")}
+                          </span>
                           <div>
-                            <strong>{team.name}</strong>
+                            <strong>{m.name}</strong>
+                            <span>{m.email}</span>
                           </div>
-                          {team.joined ? (
-                            <span className="badge">Você participa</span>
-                          ) : (
-                            <button
-                              className="button secondary"
-                              disabled={busy}
-                              onClick={() =>
-                                void run(async () => {
-                                  const r = await joinTeamAction({
-                                    ...data.scope,
-                                    teamId: team.id,
-                                  });
-                                  if (!r.ok) throw new Error(r.error);
-                                  router.push(`/app/${team.id}`);
-                                })
-                              }
-                            >
-                              Entrar na equipe
-                            </button>
+                          <span className="badge">
+                            {m.role === "manager" ? "Gestor" : "Membro"}
+                          </span>
+                          {!demo && data.role === "manager" && (
+                            <details className="member-menu">
+                              <summary aria-label={`Gerenciar ${m.name}`}>
+                                <MoreHorizontal size={17} />
+                              </summary>
+                              <div className="member-menu-items">
+                                <button
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void run(async () => {
+                                      const r = await memberAction(
+                                        data.scope,
+                                        m.id,
+                                        m.role === "manager"
+                                          ? "member"
+                                          : "manager",
+                                      );
+                                      if (!r.ok) throw new Error(r.error);
+                                      await refresh();
+                                    })
+                                  }
+                                >
+                                  {m.role === "manager"
+                                    ? "Tornar membro"
+                                    : "Tornar gestor"}
+                                </button>
+                                <button
+                                  disabled={busy}
+                                  onClick={() =>
+                                    void run(async () => {
+                                      const r = await memberAction(
+                                        data.scope,
+                                        m.id,
+                                        "remove",
+                                      );
+                                      if (!r.ok) throw new Error(r.error);
+                                      if (m.id === data.user.id)
+                                        router.push("/app");
+                                      else await refresh();
+                                    })
+                                  }
+                                >
+                                  Remover da equipe
+                                </button>
+                              </div>
+                            </details>
                           )}
                         </div>
                       ))}
+                      <p className="small muted settings-privacy">
+                        Documentos são compartilhados com a equipe. Conversas
+                        permanecem privadas; somente o resumo confirmado segue
+                        para o atendimento.
+                      </p>
                     </section>
-                  )}
-                  <section className="permissions-note">
-                    <ShieldCheck size={26} />
-                    <h2>Um espaço da equipe.</h2>
-                    <p>
-                      Documentos são compartilhados entre os membros. Conversas
-                      ficam privadas; só o resumo confirmado segue para o
-                      atendimento.
-                    </p>
-                    <p>
-                      Administradores gerenciam a organização, mas precisam
-                      participar da equipe para consultar seu conteúdo.
-                    </p>
-                  </section>
-                  {data.isAdmin && (
+                  </>
+                )}
+                {settingsSection === "teams" && (
+                  <>
+                    {" "}
+                    {
+                      <section className="panel settings-section">
+                        <h3>Equipes da organização</h3>
+                        <p className="small muted">
+                          Entrar concede acesso ao conteúdo e fica registrado na
+                          auditoria.
+                        </p>
+                        {(
+                          data.organizationTeams ||
+                          data.teams
+                            .filter(
+                              (t) =>
+                                t.organizationId === data.scope.organizationId,
+                            )
+                            .map((t) => ({
+                              id: t.teamId,
+                              name: t.name,
+                              joined: true,
+                            }))
+                        ).map((team) => (
+                          <div className="member-row" key={team.id}>
+                            <div>
+                              <strong>{team.name}</strong>
+                            </div>
+                            {team.joined ? (
+                              <button
+                                className="text-link"
+                                onClick={() =>
+                                  switchTeam({
+                                    ...data.scope,
+                                    teamId: team.id,
+                                    name: team.name,
+                                    organizationName: data.organizationName,
+                                  })
+                                }
+                              >
+                                Acessar equipe <ArrowUpRight size={14} />
+                              </button>
+                            ) : (
+                              <button
+                                className="button secondary"
+                                disabled={busy}
+                                onClick={() =>
+                                  void run(async () => {
+                                    const r = await joinTeamAction({
+                                      ...data.scope,
+                                      teamId: team.id,
+                                    });
+                                    if (!r.ok) throw new Error(r.error);
+                                    router.push(`/app/${team.id}`);
+                                  })
+                                }
+                              >
+                                Entrar na equipe
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </section>
+                    }
+                    {data.isAdmin && (
+                      <section className="panel settings-section">
+                        <h3>Criar equipe</h3>
+                        <form
+                          onSubmit={(e) => {
+                            e.preventDefault();
+                            if (demo) {
+                              setNotice(
+                                "Crie sua organização na aplicação para adicionar equipes.",
+                              );
+                              return;
+                            }
+                            const f = new FormData(e.currentTarget);
+                            void run(async () => {
+                              const r = await teamAction(
+                                data.scope.organizationId,
+                                String(f.get("name")),
+                                String(f.get("description")),
+                              );
+                              if (!r.ok) throw new Error(r.error);
+                              router.push(`/app/${r.data.teamId}`);
+                            });
+                          }}
+                        >
+                          <label>
+                            Nome
+                            <input
+                              name="name"
+                              required
+                              minLength={2}
+                              maxLength={80}
+                              placeholder="Ex.: Operações"
+                            />
+                          </label>
+                          <label>
+                            Descrição
+                            <input
+                              name="description"
+                              maxLength={240}
+                              placeholder="O que esta equipe resolve?"
+                            />
+                          </label>
+                          <button className="button secondary" disabled={busy}>
+                            Criar equipe <Plus size={15} />
+                          </button>
+                        </form>
+                      </section>
+                    )}
+                  </>
+                )}
+                {settingsSection === "workspace" && (
+                  <>
                     <section className="panel settings-section">
-                      <h3>Criar equipe</h3>
+                      <h2>{data.organizationName}</h2>
+                      <p className="small muted">
+                        Você está gerenciando este espaço de trabalho. Cada
+                        equipe mantém seus documentos e permissões.
+                      </p>
+                    </section>
+                    <section className="panel settings-section">
+                      <h3>Criar outro espaço de trabalho</h3>
+                      <p className="small muted">
+                        Crie um espaço separado, com suas próprias equipes e
+                        documentos.
+                      </p>
                       <form
                         onSubmit={(e) => {
                           e.preventDefault();
                           if (demo) {
                             setNotice(
-                              "Crie sua organização na aplicação para adicionar equipes.",
+                              "Entre na aplicação para criar uma organização.",
                             );
                             return;
                           }
                           const f = new FormData(e.currentTarget);
                           void run(async () => {
-                            const r = await teamAction(
-                              data.scope.organizationId,
+                            const r = await organizationAction(
                               String(f.get("name")),
-                              String(f.get("description")),
                             );
                             if (!r.ok) throw new Error(r.error);
                             router.push(`/app/${r.data.teamId}`);
@@ -1700,60 +2078,16 @@ export function Workspace({
                             required
                             minLength={2}
                             maxLength={80}
-                            placeholder="Ex.: Operações"
+                            placeholder="Nome da organização"
                           />
                         </label>
-                        <label>
-                          Descrição
-                          <input
-                            name="description"
-                            maxLength={240}
-                            placeholder="O que esta equipe resolve?"
-                          />
-                        </label>
-                        <button className="button secondary" disabled={busy}>
-                          Criar espaço <Plus size={15} />
+                        <button className="button subtle" disabled={busy}>
+                          Criar espaço de trabalho <Plus size={15} />
                         </button>
                       </form>
                     </section>
-                  )}
-                  <section className="panel settings-section">
-                    <h3>Nova organização</h3>
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        if (demo) {
-                          setNotice(
-                            "Entre na aplicação para criar uma organização.",
-                          );
-                          return;
-                        }
-                        const f = new FormData(e.currentTarget);
-                        void run(async () => {
-                          const r = await organizationAction(
-                            String(f.get("name")),
-                          );
-                          if (!r.ok) throw new Error(r.error);
-                          router.push(`/app/${r.data.teamId}`);
-                        });
-                      }}
-                    >
-                      <label>
-                        Nome
-                        <input
-                          name="name"
-                          required
-                          minLength={2}
-                          maxLength={80}
-                          placeholder="Nome da organização"
-                        />
-                      </label>
-                      <button className="button subtle" disabled={busy}>
-                        Criar organização <Plus size={15} />
-                      </button>
-                    </form>
-                  </section>
-                </aside>
+                  </>
+                )}
               </div>
             </>
           )}
@@ -1770,6 +2104,131 @@ export function Workspace({
           </footer>
         </main>
       </div>
+      {deleteConversationId && (
+        <Modal
+          title="Excluir conversa"
+          onClose={() => setDeleteConversationId(null)}
+        >
+          <h2>Excluir esta conversa?</h2>
+          <p>
+            As mensagens e etapas desta conversa serão apagadas permanentemente.
+            Solicitações já criadas serão preservadas.
+          </p>
+          {error && (
+            <p className="error-text" role="alert">
+              {error}
+            </p>
+          )}
+          <button
+            className="button danger full"
+            disabled={busy}
+            onClick={() =>
+              void run(async () => {
+                if (demo)
+                  setData((d) => ({
+                    ...d,
+                    conversations: d.conversations.filter(
+                      (c) => c.id !== deleteConversationId,
+                    ),
+                  }));
+                else {
+                  const result = await deleteConversationAction(
+                    data.scope,
+                    deleteConversationId,
+                  );
+                  if (!result.ok) throw new Error(result.error);
+                  await refresh(null);
+                }
+                if (activeId === deleteConversationId) setActiveId(null);
+                setDeleteConversationId(null);
+              })
+            }
+          >
+            Excluir conversa definitivamente
+          </button>
+        </Modal>
+      )}
+      {inviteOpen && data.role === "manager" && (
+        <Modal title="Convidar pessoa" onClose={() => setInviteOpen(false)}>
+          <h2>Convidar para {data.teamName}</h2>
+          <p>
+            O convite dá acesso somente a esta equipe, no espaço{" "}
+            {data.organizationName}.
+          </p>
+          {error && (
+            <p className="error-text" role="alert">
+              {error}
+            </p>
+          )}
+          {notice && (
+            <p className="small muted" role="status">
+              {notice}
+            </p>
+          )}
+          {data.role === "manager" && (
+            <form
+              className="settings-form"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (demo) {
+                  setNotice("Convites reais estão disponíveis na aplicação.");
+                  return;
+                }
+                const f = new FormData(e.currentTarget);
+                void run(async () => {
+                  const r = await inviteAction(
+                    data.scope,
+                    String(f.get("email")),
+                    f.get("role") as "member" | "manager",
+                  );
+                  if (!r.ok) throw new Error(r.error);
+                  setInviteLink(r.data);
+                });
+              }}
+            >
+              <h3>Convide alguém para esta equipe</h3>
+              <label>
+                Email
+                <input
+                  name="email"
+                  type="email"
+                  required
+                  placeholder="pessoa@equipe.com"
+                />
+              </label>
+              <label>
+                Papel
+                <select name="role">
+                  <option value="member">
+                    Membro — consulta e solicitações próprias
+                  </option>
+                  <option value="manager">
+                    Gestor — documentos, pessoas e atendimento
+                  </option>
+                </select>
+              </label>
+              <button className="button secondary" disabled={busy}>
+                <Plus size={15} />
+                Gerar convite
+              </button>
+              {inviteLink && (
+                <label>
+                  Link de convite · válido por 7 dias
+                  <input
+                    readOnly
+                    value={inviteLink}
+                    onFocus={(e) => e.target.select()}
+                  />
+                  <span className="small muted">
+                    Copie e compartilhe com o destinatário. Ele precisa entrar
+                    com o email informado.
+                  </span>
+                </label>
+              )}
+            </form>
+          )}
+        </Modal>
+      )}
       {source && (
         <Modal
           title="Fonte consultada"
@@ -1962,6 +2421,27 @@ function Modal({
   closeLabel?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
+  const closing = useRef(false);
+  function close() {
+    if (closing.current) return;
+    closing.current = true;
+    const el = ref.current;
+    if (!el || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+      onClose();
+      return;
+    }
+    el.classList.add("is-closing");
+    void el
+      .animate(
+        [
+          { opacity: 1, transform: "translateY(0) scale(1)" },
+          { opacity: 0, transform: "translateY(6px) scale(.98)" },
+        ],
+        { duration: 160, easing: "ease-in", fill: "forwards" },
+      )
+      .finished.then(onClose, onClose);
+  }
+
   useEffect(() => {
     const el = ref.current;
     const previous = document.activeElement as HTMLElement;
@@ -1976,22 +2456,30 @@ function Modal({
       className="modal"
       ref={ref}
       aria-label={title}
-      onCancel={onClose}
+      onCancel={(event) => {
+        event.preventDefault();
+        close();
+      }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) close();
       }}
     >
       <div className="modal-header">
         <span>{title}</span>
-        <button
-          className="icon-button"
-          aria-label={closeLabel}
-          onClick={onClose}
-        >
+        <button className="icon-button" aria-label={closeLabel} onClick={close}>
           <X size={19} />
         </button>
       </div>
       <div className="modal-body">{children}</div>
     </dialog>
   );
+}
+
+function subscribeTheme(callback: () => void) {
+  window.addEventListener("storage", callback);
+  window.addEventListener("knowflow-theme-change", callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener("knowflow-theme-change", callback);
+  };
 }

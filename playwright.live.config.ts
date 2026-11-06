@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 export default defineConfig({
   testDir: "./e2e",
+  outputDir: "./test-results/live",
   testMatch: "live.spec.ts",
   workers: 1,
   timeout: 90000,

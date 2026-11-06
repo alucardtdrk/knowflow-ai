@@ -16,6 +16,7 @@ export type MessageItem = {
   unavailableCount?: number;
 };
 export type ConversationItem = {
+  preview?: string;
   id: string;
   title: string;
   messages: MessageItem[];
@@ -33,6 +34,9 @@ export type RequestItem = {
   comments: { id: string; author: string; content: string }[];
 };
 export type WorkspaceData = {
+  conversationPage?: number;
+  conversationTotal?: number;
+  invitations?: PendingInvitation[];
   scope: Scope;
   user: { id: string; name: string; email: string };
   role: TeamRole;
@@ -46,4 +50,12 @@ export type WorkspaceData = {
   conversations: ConversationItem[];
   requests: RequestItem[];
   members: { id: string; name: string; email: string; role: TeamRole }[];
+};
+
+export type PendingInvitation = {
+  id: string;
+  teamId: string;
+  teamName: string;
+  organizationName: string;
+  role: TeamRole;
 };

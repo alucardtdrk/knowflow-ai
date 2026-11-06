@@ -3,7 +3,69 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { organizationAction, acceptInviteAction } from "@/app/actions";
-export function Onboarding({ name }: { name: string }) {
+import type { PendingInvitation } from "@/lib/workspace";
+
+export function PendingInvitations({
+  invitations,
+}: {
+  invitations: PendingInvitation[];
+}) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  if (!invitations.length) return null;
+  return (
+    <section
+      className="panel received-invitations"
+      aria-label="Convites recebidos"
+    >
+      <h2>Convites recebidos</h2>
+      <p>
+        Entre em uma equipe existente. Você não precisa criar outra organização.
+      </p>
+      {invitations.map((invite) => (
+        <div className="member-row" key={invite.id}>
+          <div>
+            <strong>
+              {invite.organizationName} · {invite.teamName}
+            </strong>
+            <span>{invite.role === "manager" ? "Gestor" : "Membro"}</span>
+          </div>
+          <button
+            className="button primary"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              const result = await acceptInviteAction(invite.id);
+              if (result.ok) {
+                router.push(`/app/${result.data.teamId}`);
+                router.refresh();
+              } else {
+                setError(result.error);
+                setBusy(false);
+              }
+            }}
+          >
+            Entrar na equipe
+          </button>
+        </div>
+      ))}
+      {error && (
+        <p className="error-text" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+export function Onboarding({
+  name,
+  invitations = [],
+}: {
+  name: string;
+  invitations?: PendingInvitation[];
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -18,9 +80,10 @@ export function Onboarding({ name }: { name: string }) {
         <span className="eyebrow">VAMOS COMEÇAR</span>
         <h1>Um espaço para o que sua equipe sabe.</h1>
         <p>
-          Olá, {name}. Crie sua organização ou abra o link de convite que
-          recebeu.
+          Olá, {name}. Aceite um convite recebido ou crie uma organização se
+          você estiver começando uma nova equipe.
         </p>
+        <PendingInvitations invitations={invitations} />
         <form
           onSubmit={async (e) => {
             e.preventDefault();
@@ -58,7 +121,14 @@ export function Onboarding({ name }: { name: string }) {
     </main>
   );
 }
-export function Invite({ token }: { token: string }) {
+export function Invite({
+  token,
+  authenticated,
+}: {
+  token: string;
+  authenticated: boolean;
+}) {
+  const loginUrl = `/login?invite=${encodeURIComponent(token)}`;
   const router = useRouter();
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -68,13 +138,17 @@ export function Invite({ token }: { token: string }) {
         <span className="eyebrow">CONVITE PARA EQUIPE</span>
         <h1>Conhecimento fica melhor quando é compartilhado.</h1>
         <p>Entre com o email que recebeu o convite antes de aceitar.</p>
-        <a className="text-link" href="/login">
+        <a className="text-link" href={loginUrl}>
           Entrar ou criar minha conta
         </a>
         <button
           className="button primary full"
           disabled={busy}
           onClick={async () => {
+            if (!authenticated) {
+              router.push(loginUrl);
+              return;
+            }
             setBusy(true);
             const r = await acceptInviteAction(token);
             if (r.ok) router.push(`/app/${r.data.teamId}`);
@@ -82,7 +156,7 @@ export function Invite({ token }: { token: string }) {
             setBusy(false);
           }}
         >
-          Aceitar convite
+          {authenticated ? "Aceitar convite" : "Entrar para aceitar convite"}
         </button>
         {error && (
           <p role="alert" className="error-text">

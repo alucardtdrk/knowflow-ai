@@ -5,7 +5,12 @@ import { rows } from "@/lib/db";
 import { requireActor, requireTeamAccess } from "@/lib/access";
 import type { Scope, TeamRole, RequestStatus, Source } from "@/lib/types";
 import type { WorkspaceData, MessageItem } from "@/lib/workspace";
-import { answer, recordStepResult } from "@/features/assistant/service";
+import {
+  answer,
+  recordStepResult,
+  ownConversation,
+  deleteConversation,
+} from "@/features/assistant/service";
 import {
   uploadDocument,
   deleteDocument,
@@ -14,6 +19,7 @@ import {
 } from "@/features/documents/service";
 import { createRequest, updateRequest } from "@/features/requests/service";
 import {
+  listPendingInvitations,
   createOrganization,
   createTeam,
   inviteMember,
@@ -43,7 +49,13 @@ async function safe<T>(
     };
   }
 }
-export async function loadWorkspace(teamId: string): Promise<WorkspaceData> {
+export async function loadWorkspace(
+  teamId: string,
+  page = 1,
+  conversationId?: string,
+): Promise<WorkspaceData> {
+  z.number().int().min(1).max(1000000).parse(page);
+  if (conversationId) z.uuid().parse(conversationId);
   z.uuid().parse(teamId);
   const actor = await requireActor();
   const teams = await rows<Scope & { name: string; organizationName: string }>(
@@ -65,10 +77,18 @@ export async function loadWorkspace(teamId: string): Promise<WorkspaceData> {
   const documents = await rows<WorkspaceData["documents"][number]>(
     sql`SELECT id,title,format,size,status,error,created_at::text AS "createdAt" FROM documents WHERE team_id=${teamId} AND organization_id=${scope.organizationId} AND status<>'deleted' ORDER BY created_at DESC`,
   );
+  const [conversationCount] = await rows<{ total: number }>(
+    sql`SELECT count(*)::int AS total FROM conversations WHERE team_id=${teamId} AND organization_id=${scope.organizationId} AND author_id=${actor.userId}`,
+  );
+  page = Math.min(page, Math.max(1, Math.ceil(conversationCount.total / 10)));
+  if (conversationId) await ownConversation(actor, scope, conversationId);
   const conversations = await rows<WorkspaceData["conversations"][number]>(
-    sql`SELECT id,title FROM conversations WHERE team_id=${teamId} AND organization_id=${scope.organizationId} AND author_id=${actor.userId} ORDER BY created_at DESC LIMIT 30`,
+    sql`SELECT c.id,c.title,(SELECT left(m.content,120) FROM messages m WHERE m.conversation_id=c.id ORDER BY m.sequence DESC LIMIT 1) AS preview FROM conversations c WHERE c.team_id=${teamId} AND c.organization_id=${scope.organizationId} AND c.author_id=${actor.userId} ORDER BY c.created_at DESC,c.id DESC LIMIT 10 OFFSET ${(page - 1) * 10}`,
   );
   for (const c of conversations) {
+    c.messages = [];
+    c.steps = [];
+    if (c.id !== conversationId) continue;
     const messages = await rows<MessageItem & { sourceIds: string[] }>(
       sql`SELECT id,role,content,source_ids AS "sourceIds" FROM messages WHERE conversation_id=${c.id} ORDER BY sequence`,
     );
@@ -116,12 +136,15 @@ export async function loadWorkspace(teamId: string): Promise<WorkspaceData> {
     role,
     isAdmin: org?.role === "admin",
     organizationTeams,
+    invitations: await listPendingInvitations(actor),
     organizationName: team.organizationName,
     teamName: team.name,
     teamDescription: detail.description,
     teams,
     documents,
     conversations,
+    conversationPage: page,
+    conversationTotal: conversationCount.total,
     requests,
     members,
   };
@@ -230,5 +253,15 @@ export async function memberAction(
 export async function joinTeamAction(scope: Scope) {
   return safe(async () =>
     joinTeamAsAdmin(await requireActor(), scopeSchema.parse(scope)),
+  );
+}
+
+export async function deleteConversationAction(scope: Scope, id: string) {
+  return safe(async () =>
+    deleteConversation(
+      await requireActor(),
+      scopeSchema.parse(scope),
+      z.uuid().parse(id),
+    ),
   );
 }

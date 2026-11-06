@@ -13,6 +13,7 @@ export function buildRequestSummary(conversation: ConversationItem) {
     ).values(),
   );
   const results: Record<string, string> = {
+    answered: "Respondida pelo chat; ver contexto informado",
     worked: "Funcionou",
     failed: "Não resolveu",
     unable: "Não foi possível realizar",

@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { sql } from "drizzle-orm";
 import { getDb, rows } from "@/lib/db";
 import { AppError } from "@/lib/errors";
-import { embed } from "@/features/assistant/provider";
 import { getObject, deleteObject } from "./storage";
 import { extractDocument, type Format } from "./extract";
 
@@ -44,16 +43,10 @@ export async function processNextJob(): Promise<boolean> {
         await getObject(doc.object_key),
         doc.format,
       );
-      const embeddings: number[][] = [];
-      for (let i = 0; i < chunks.length; i += 32) {
-        const [active] = await rows(
-          sql`UPDATE jobs SET lease_until=now()+interval '10 minutes' WHERE id=${job.id} AND claim_id=${claimId} RETURNING id`,
-        );
-        if (!active) return true;
-        embeddings.push(
-          ...(await embed(chunks.slice(i, i + 32).map((c) => c.content))),
-        );
-      }
+      const [claimed] = await rows(
+        sql`UPDATE jobs SET lease_until=now()+interval '10 minutes' WHERE id=${job.id} AND claim_id=${claimId} RETURNING id`,
+      );
+      if (!claimed) return true;
       await getDb().transaction(async (tx) => {
         const [active] = await rows(
           sql`SELECT id FROM jobs WHERE id=${job.id} AND claim_id=${claimId} FOR UPDATE`,
@@ -70,7 +63,7 @@ export async function processNextJob(): Promise<boolean> {
         );
         for (let i = 0; i < chunks.length; i++)
           await tx.execute(
-            sql`INSERT INTO chunks(document_id,location,content,embedding) VALUES (${job.document_id},${chunks[i].location},${chunks[i].content},${JSON.stringify(embeddings[i])}::vector)`,
+            sql`INSERT INTO chunks(document_id,location,content) VALUES (${job.document_id},${chunks[i].location},${chunks[i].content})`,
           );
         await tx.execute(
           sql`UPDATE documents SET status='ready',error=NULL WHERE id=${job.document_id}`,

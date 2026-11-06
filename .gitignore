@@ -6,3 +6,9 @@ node_modules/
 test-results/
 playwright-report/
 *.tsbuildinfo
+
+# Private local knowledge files
+/base de conhecimento/
+
+# Local diagnostic output
+*.log

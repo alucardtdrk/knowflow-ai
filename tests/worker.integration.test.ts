@@ -17,7 +17,7 @@ const external = vi.hoisted(() => ({
   files: new Map<string, Uint8Array>(),
   failPut: false,
   failGet: false,
-  onEmbed: null as null | (() => Promise<void>),
+  onGet: null as null | (() => Promise<void>),
 }));
 vi.mock("@/features/documents/storage", () => ({
   putObject: async (key: string, data: Uint8Array) => {
@@ -25,16 +25,11 @@ vi.mock("@/features/documents/storage", () => ({
   },
   getObject: async (key: string) => {
     if (external.failGet) throw new Error("Storage down");
+    if (external.onGet) await external.onGet();
     return external.files.get(key)!;
   },
   deleteObject: async (key: string) => {
     external.files.delete(key);
-  },
-}));
-vi.mock("@/features/assistant/provider", () => ({
-  embed: async (texts: string[]) => {
-    if (external.onEmbed) await external.onEmbed();
-    return texts.map(() => [1, ...Array(1535).fill(0)]);
   },
 }));
 const pg = new PGlite({ extensions: { vector } });
@@ -53,7 +48,7 @@ beforeAll(async () => {
 beforeEach(async () => {
   await db.execute(sql`DELETE FROM documents`);
   external.failGet = false;
-  external.onEmbed = null;
+  external.onGet = null;
   external.files.clear();
 });
 afterAll(async () => {
@@ -109,9 +104,9 @@ it("bounds retries and allows explicit recovery after an external storage failur
     )[0].status,
   ).toBe("ready");
 });
-it("does not resurrect a document deleted while embeddings are in flight", async () => {
+it("does not resurrect a document deleted while its file is being read", async () => {
   const { id } = await uploadDocument(actor, scope, file());
-  external.onEmbed = async () => {
+  external.onGet = async () => {
     await deleteDocument(actor, scope, id);
   };
   await processNextJob();

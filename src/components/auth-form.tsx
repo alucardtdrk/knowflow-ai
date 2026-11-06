@@ -4,47 +4,34 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { createAuthClient } from "better-auth/react";
-import { ArrowUpRight, ArrowRight, BookOpen, ShieldCheck } from "lucide-react";
-import { KnowledgeScene } from "./knowledge-scene";
+import { ArrowUpRight, ArrowRight, ShieldCheck } from "lucide-react";
 const authClient = createAuthClient();
-export function AuthForm({ configured }: { configured: boolean }) {
+export function AuthForm({
+  configured,
+  redirectTo = "/app",
+}: {
+  configured: boolean;
+  redirectTo?: string;
+}) {
   const router = useRouter();
   const [signup, setSignup] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   return (
-    <main className="login-layout">
+    <main className="login-layout editorial-login">
       <aside className="login-story">
         <Link href="/demo" className="brand">
           <img src="/brand/knowflow-wordmark.svg" alt="KnowFlow AI" />
         </Link>
         <div>
-          <span className="eyebrow">CONHECIMENTO QUE RESOLVE</span>
-          <h1>
-            O próximo passo
-            <br />
-            já está nos
-            <br />
-            <em>seus documentos.</em>
-          </h1>
+          <h1>O conhecimento da sua equipe, no mesmo lugar.</h1>
           <p>
-            Conecte o que sua equipe sabe
-            <br />
-            com o que ela precisa resolver.
+            Consulte documentos, continue conversas e acompanhe solicitações.
           </p>
-          <div className="story-note">
-            <BookOpen size={22} />
-            <span>
-              Menos tempo procurando.
-              <br />
-              Mais clareza para seguir em frente.
-            </span>
-          </div>
-          <KnowledgeScene />
         </div>
-        <span className="small muted">
-          Feito para pessoas. Baseado em conhecimento.
-        </span>
+        <p className="small muted login-permissions">
+          Documentos organizados por equipe. Acesso conforme suas permissões.
+        </p>
       </aside>
       <section className="login-form">
         <Link className="text-link back-demo" href="/demo">
@@ -87,7 +74,7 @@ export function AuthForm({ configured }: { configured: boolean }) {
                   setError(
                     "Não foi possível entrar. Confira seus dados ou tente outro email ao criar uma conta.",
                   );
-                else router.push("/app");
+                else router.push(redirectTo);
               } catch {
                 setError("Não foi possível conectar. Tente novamente.");
               } finally {

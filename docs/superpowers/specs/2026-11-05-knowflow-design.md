@@ -7,7 +7,7 @@ Status: proposta para aprovação.
 
 KnowFlow AI transforma documentos de uma organização em respostas verificáveis, orientação para realizar tarefas e encaminhamento humano. O produto atende diferentes áreas, sem regras de negócio fixas de TI, RH ou financeiro.
 
-Cada organização contém espaços de equipe. Cada espaço tem documentos, membros, permissões, conversas e solicitações próprios. Uma pessoa pode participar de vários espaços. A primeira versão usa uma aplicação integrada com Next.js, PostgreSQL e busca vetorial; processamento de documentos em segundo plano. A identidade visual é a v3 da pasta C:/Users/alucard/Downloads/knowflow-brand.
+Refer�ncia visual: arquivo local privado, n�o inclu�do no reposit�rio.
 
 ## Objetivos e limites
 

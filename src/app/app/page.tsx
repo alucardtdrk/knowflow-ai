@@ -3,6 +3,7 @@ import { sql } from "drizzle-orm";
 import { rows } from "@/lib/db";
 import { requireActor } from "@/lib/access";
 import { AppError } from "@/lib/errors";
+import { listPendingInvitations } from "@/features/teams/service";
 import { Onboarding } from "@/components/onboarding";
 export const dynamic = "force-dynamic";
 export default async function AppHome() {
@@ -22,5 +23,10 @@ export default async function AppHome() {
   const [user] = await rows<{ name: string }>(
     sql`SELECT name FROM "user" WHERE id=${actor.userId}`,
   );
-  return <Onboarding name={user.name} />;
+  return (
+    <Onboarding
+      name={user.name}
+      invitations={await listPendingInvitations(actor)}
+    />
+  );
 }

@@ -109,6 +109,6 @@ console.log(
   "Organizações de exemplo disponíveis. Execução repetida não duplica os exemplos.",
 );
 console.log(
-  "Sem chave de IA, documentos enviados falharão com orientação de configuração. A rota /demo funciona sem serviços externos.",
+  "Documentos são indexados localmente. Configure TOQAN_API_KEY para gerar orientações com o agente Toqan.",
 );
 process.exit(0);
