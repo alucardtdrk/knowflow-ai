@@ -69,6 +69,12 @@ test("demo keeps requests and conversations scoped to the selected team", async 
   await page
     .getByRole("button", { name: "P Pessoas & Cultura", exact: true })
     .click();
+  await expect(
+    page.getByRole("button", { name: "P Pessoas & Cultura", exact: true }),
+  ).toHaveAttribute("aria-current", "true");
+  await expect(
+    page.getByRole("button", { name: "T Tecnologia", exact: true }),
+  ).not.toHaveAttribute("aria-current", "true");
   if (isMobile)
     await page.getByRole("button", { name: "Abrir menu", exact: true }).click();
   await page.getByRole("button", { name: "Solicitações", exact: true }).click();

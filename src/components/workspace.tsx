@@ -431,6 +431,7 @@ export function Workspace({
             <button
               key={t.teamId}
               className={`team-item ${t.teamId === data.scope.teamId ? "selected" : ""}`}
+              aria-current={t.teamId === data.scope.teamId ? "true" : undefined}
               onClick={() => {
                 if (demo) {
                   demoSpaces.current[data.scope.teamId] = data;
@@ -475,7 +476,11 @@ export function Workspace({
               </span>
               <span>{t.name}</span>
               {t.teamId === data.scope.teamId && (
-                <span className="selected-dot" />
+                <Check
+                  className="team-selected-check"
+                  size={15}
+                  aria-hidden="true"
+                />
               )}
             </button>
           ))}

@@ -152,7 +152,21 @@
   height: 24px;
 }
 .team-item.selected {
-  background: #e8e3d780;
+  background: #ead3c5;
+  color: #903c29;
+  font-weight: 650;
+  box-shadow:
+    inset 3px 0 0 var(--terracotta),
+    inset 0 0 0 1px #b84e3620;
+}
+.team-item.selected .team-square {
+  background: var(--terracotta);
+  color: #fffdfa;
+}
+.team-selected-check {
+  margin-left: auto;
+  flex-shrink: 0;
+  stroke-width: 2.5;
 }
 .user-row .avatar {
   box-shadow: 0 0 0 3px #f8f5ef;
